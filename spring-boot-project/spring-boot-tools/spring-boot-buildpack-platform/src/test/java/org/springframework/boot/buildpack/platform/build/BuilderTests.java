@@ -72,18 +72,34 @@ class BuilderTests {
 		DockerApi docker = mockDockerApi();
 		Image builderImage = loadImage("image.json");
 		Image runImage = loadImage("run-image.json");
-		given(docker.image().pull(eq(ImageReference.of("docker.io/" + BuildRequest.DEFAULT_BUILDER_IMAGE_NAME)), any()))
+		given(docker.image().pull(eq(ImageReference.of(BuildRequest.DEFAULT_BUILDER_IMAGE_NAME)), any()))
 				.willAnswer(withPulledImage(builderImage));
 		given(docker.image().pull(eq(ImageReference.of("docker.io/cloudfoundry/run:base-cnb")), any()))
 				.willAnswer(withPulledImage(runImage));
 		Builder builder = new Builder(BuildLog.to(out), docker);
 		BuildRequest request = getTestRequest();
 		builder.build(request);
-		assertThat(out.toString()).contains("Running detector");
-		assertThat(out.toString()).contains("Running restorer");
-		assertThat(out.toString()).contains("Running analyzer");
-		assertThat(out.toString()).contains("Running builder");
-		assertThat(out.toString()).contains("Running exporter");
+		assertThat(out.toString()).contains("Running creator");
+		assertThat(out.toString()).contains("Successfully built image 'docker.io/library/my-application:latest'");
+		ArgumentCaptor<ImageArchive> archive = ArgumentCaptor.forClass(ImageArchive.class);
+		verify(docker.image()).load(archive.capture(), any());
+		verify(docker.image()).remove(archive.getValue().getTag(), true);
+	}
+
+	@Test
+	void buildInvokesBuilderWithDefaultImageTags() throws Exception {
+		TestPrintStream out = new TestPrintStream();
+		DockerApi docker = mockDockerApi();
+		Image builderImage = loadImage("image-with-no-run-image-tag.json");
+		Image runImage = loadImage("run-image.json");
+		given(docker.image().pull(eq(ImageReference.of("gcr.io/paketo-buildpacks/builder:latest")), any()))
+				.willAnswer(withPulledImage(builderImage));
+		given(docker.image().pull(eq(ImageReference.of("docker.io/cloudfoundry/run:latest")), any()))
+				.willAnswer(withPulledImage(runImage));
+		Builder builder = new Builder(BuildLog.to(out), docker);
+		BuildRequest request = getTestRequest().withBuilder(ImageReference.of("gcr.io/paketo-buildpacks/builder"));
+		builder.build(request);
+		assertThat(out.toString()).contains("Running creator");
 		assertThat(out.toString()).contains("Successfully built image 'docker.io/library/my-application:latest'");
 		ArgumentCaptor<ImageArchive> archive = ArgumentCaptor.forClass(ImageArchive.class);
 		verify(docker.image()).load(archive.capture(), any());
@@ -96,7 +112,7 @@ class BuilderTests {
 		DockerApi docker = mockDockerApi();
 		Image builderImage = loadImage("image.json");
 		Image runImage = loadImage("run-image-with-bad-stack.json");
-		given(docker.image().pull(eq(ImageReference.of("docker.io/" + BuildRequest.DEFAULT_BUILDER_IMAGE_NAME)), any()))
+		given(docker.image().pull(eq(ImageReference.of(BuildRequest.DEFAULT_BUILDER_IMAGE_NAME)), any()))
 				.willAnswer(withPulledImage(builderImage));
 		given(docker.image().pull(eq(ImageReference.of("docker.io/cloudfoundry/run:base-cnb")), any()))
 				.willAnswer(withPulledImage(runImage));
@@ -112,14 +128,14 @@ class BuilderTests {
 		DockerApi docker = mockDockerApiLifecycleError();
 		Image builderImage = loadImage("image.json");
 		Image runImage = loadImage("run-image.json");
-		given(docker.image().pull(eq(ImageReference.of("docker.io/" + BuildRequest.DEFAULT_BUILDER_IMAGE_NAME)), any()))
+		given(docker.image().pull(eq(ImageReference.of(BuildRequest.DEFAULT_BUILDER_IMAGE_NAME)), any()))
 				.willAnswer(withPulledImage(builderImage));
 		given(docker.image().pull(eq(ImageReference.of("docker.io/cloudfoundry/run:base-cnb")), any()))
 				.willAnswer(withPulledImage(runImage));
 		Builder builder = new Builder(BuildLog.to(out), docker);
 		BuildRequest request = getTestRequest();
 		assertThatExceptionOfType(BuilderException.class).isThrownBy(() -> builder.build(request))
-				.withMessage("Builder lifecycle 'detector' failed with status code 9");
+				.withMessage("Builder lifecycle 'creator' failed with status code 9");
 	}
 
 	private DockerApi mockDockerApi() throws IOException {

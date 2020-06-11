@@ -10,8 +10,7 @@ description = "Spring Boot Actuator"
 
 dependencies {
 	api(platform(project(":spring-boot-project:spring-boot-dependencies")))
-
-	implementation(project(":spring-boot-project:spring-boot"))
+	api(project(":spring-boot-project:spring-boot"))
 
 	optional(platform(project(":spring-boot-project:spring-boot-dependencies")))
 	optional("com.fasterxml.jackson.core:jackson-databind")
@@ -87,6 +86,7 @@ dependencies {
 	testRuntimeOnly("javax.xml.bind:jaxb-api")
 	testRuntimeOnly("org.apache.tomcat.embed:tomcat-embed-el")
 	testRuntimeOnly("org.glassfish.jersey.ext:jersey-spring5")
+	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 	testRuntimeOnly("org.hsqldb:hsqldb")
 }
 

@@ -20,8 +20,16 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.apache.http.HttpHost;
+import org.apache.http.auth.AuthScope;
+import org.apache.http.auth.Credentials;
+import org.apache.http.client.CredentialsProvider;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.impl.nio.client.HttpAsyncClientBuilder;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.client.Node;
 import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestClientBuilder;
@@ -36,7 +44,6 @@ import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -45,6 +52,8 @@ import static org.mockito.Mockito.mock;
  * Tests for {@link ElasticsearchRestClientAutoConfiguration}.
  *
  * @author Brian Clozel
+ * @author Vedran Pavic
+ * @author Evgeniy Cheban
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ElasticsearchRestClientAutoConfigurationTests {
@@ -53,7 +62,7 @@ class ElasticsearchRestClientAutoConfigurationTests {
 	static final ElasticsearchContainer elasticsearch = new ElasticsearchContainer().withStartupAttempts(5)
 			.withStartupTimeout(Duration.ofMinutes(10));
 
-	private ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
 			.withConfiguration(AutoConfigurations.of(ElasticsearchRestClientAutoConfiguration.class));
 
 	@Test
@@ -106,6 +115,18 @@ class ElasticsearchRestClientAutoConfigurationTests {
 			assertThat(context).hasSingleBean(RestClient.class);
 			RestClient restClient = context.getBean(RestClient.class);
 			assertThat(restClient).hasFieldOrPropertyWithValue("pathPrefix", "/test");
+			assertThat(restClient).extracting("client.connmgr.pool.maxTotal").isEqualTo(100);
+			assertThat(restClient).extracting("client.defaultConfig.cookieSpec").isEqualTo("rfc6265-lax");
+		});
+	}
+
+	@Test
+	@Deprecated
+	void configureWhenDeprecatedBuilderCustomizerShouldApply() {
+		this.contextRunner.withUserConfiguration(DeprecatedBuilderCustomizerConfiguration.class).run((context) -> {
+			assertThat(context).hasSingleBean(RestClient.class);
+			RestClient restClient = context.getBean(RestClient.class);
+			assertThat(restClient).hasFieldOrPropertyWithValue("pathPrefix", "/deprecated");
 		});
 	}
 
@@ -130,10 +151,10 @@ class ElasticsearchRestClientAutoConfigurationTests {
 	}
 
 	private static void assertTimeouts(RestClient restClient, Duration connectTimeout, Duration readTimeout) {
-		Object client = ReflectionTestUtils.getField(restClient, "client");
-		Object config = ReflectionTestUtils.getField(client, "defaultConfig");
-		assertThat(config).hasFieldOrPropertyWithValue("socketTimeout", Math.toIntExact(readTimeout.toMillis()));
-		assertThat(config).hasFieldOrPropertyWithValue("connectTimeout", Math.toIntExact(connectTimeout.toMillis()));
+		assertThat(restClient).extracting("client.defaultConfig.socketTimeout")
+				.isEqualTo(Math.toIntExact(readTimeout.toMillis()));
+		assertThat(restClient).extracting("client.defaultConfig.connectTimeout")
+				.isEqualTo(Math.toIntExact(connectTimeout.toMillis()));
 	}
 
 	@Test
@@ -152,6 +173,69 @@ class ElasticsearchRestClientAutoConfigurationTests {
 				});
 	}
 
+	@Test
+	void configureUriWithUsernameOnly() {
+		this.contextRunner.withPropertyValues("spring.elasticsearch.rest.uris=http://user@localhost:9200")
+				.run((context) -> {
+					RestClient client = context.getBean(RestClient.class);
+					assertThat(client.getNodes().stream().map(Node::getHost).map(HttpHost::toString))
+							.containsExactly("http://localhost:9200");
+					assertThat(client).extracting("client")
+							.extracting("credentialsProvider",
+									InstanceOfAssertFactories.type(CredentialsProvider.class))
+							.satisfies((credentialsProvider) -> {
+								Credentials credentials = credentialsProvider
+										.getCredentials(new AuthScope("localhost", 9200));
+								assertThat(credentials.getUserPrincipal().getName()).isEqualTo("user");
+								assertThat(credentials.getPassword()).isNull();
+							});
+				});
+	}
+
+	@Test
+	void configureUriWithUsernameAndEmptyPassword() {
+		this.contextRunner.withPropertyValues("spring.elasticsearch.rest.uris=http://user:@localhost:9200")
+				.run((context) -> {
+					RestClient client = context.getBean(RestClient.class);
+					assertThat(client.getNodes().stream().map(Node::getHost).map(HttpHost::toString))
+							.containsExactly("http://localhost:9200");
+					assertThat(client).extracting("client")
+							.extracting("credentialsProvider",
+									InstanceOfAssertFactories.type(CredentialsProvider.class))
+							.satisfies((credentialsProvider) -> {
+								Credentials credentials = credentialsProvider
+										.getCredentials(new AuthScope("localhost", 9200));
+								assertThat(credentials.getUserPrincipal().getName()).isEqualTo("user");
+								assertThat(credentials.getPassword()).isEmpty();
+							});
+				});
+	}
+
+	@Test
+	void configureUriWithUsernameAndPasswordWhenUsernameAndPasswordPropertiesSet() {
+		this.contextRunner
+				.withPropertyValues("spring.elasticsearch.rest.uris=http://user:password@localhost:9200,localhost:9201",
+						"spring.elasticsearch.rest.username=admin", "spring.elasticsearch.rest.password=admin")
+				.run((context) -> {
+					RestClient client = context.getBean(RestClient.class);
+					assertThat(client.getNodes().stream().map(Node::getHost).map(HttpHost::toString))
+							.containsExactly("http://localhost:9200", "http://localhost:9201");
+					assertThat(client).extracting("client")
+							.extracting("credentialsProvider",
+									InstanceOfAssertFactories.type(CredentialsProvider.class))
+							.satisfies((credentialsProvider) -> {
+								Credentials uriCredentials = credentialsProvider
+										.getCredentials(new AuthScope("localhost", 9200));
+								assertThat(uriCredentials.getUserPrincipal().getName()).isEqualTo("user");
+								assertThat(uriCredentials.getPassword()).isEqualTo("password");
+								Credentials defaultCredentials = credentialsProvider
+										.getCredentials(new AuthScope("localhost", 9201));
+								assertThat(defaultCredentials.getUserPrincipal().getName()).isEqualTo("admin");
+								assertThat(defaultCredentials.getPassword()).isEqualTo("admin");
+							});
+				});
+	}
+
 	@Configuration(proxyBeanMethods = false)
 	static class CustomRestClientConfiguration {
 
@@ -167,7 +251,35 @@ class ElasticsearchRestClientAutoConfigurationTests {
 
 		@Bean
 		RestClientBuilderCustomizer myCustomizer() {
-			return (builder) -> builder.setPathPrefix("/test");
+			return new RestClientBuilderCustomizer() {
+
+				@Override
+				public void customize(RestClientBuilder builder) {
+					builder.setPathPrefix("/test");
+				}
+
+				@Override
+				public void customize(HttpAsyncClientBuilder builder) {
+					builder.setMaxConnTotal(100);
+				}
+
+				@Override
+				public void customize(RequestConfig.Builder builder) {
+					builder.setCookieSpec("rfc6265-lax");
+				}
+
+			};
+		}
+
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	@Deprecated
+	static class DeprecatedBuilderCustomizerConfiguration {
+
+		@Bean
+		org.springframework.boot.autoconfigure.elasticsearch.rest.RestClientBuilderCustomizer myCustomizer() {
+			return (builder) -> builder.setPathPrefix("/deprecated");
 		}
 
 	}
